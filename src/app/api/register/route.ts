@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { generateSlug } from '@/lib/utils';
+import { isOnLiveRoster } from '@/lib/roster';
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,6 +15,15 @@ export async function POST(req: NextRequest) {
     const settings = await prisma.companySettings.findFirst();
     if (!settings || settings.inviteCode !== inviteCode) {
       return NextResponse.json({ error: 'Invalid invite code' }, { status: 400 });
+    }
+
+    // Only people on the live roster get a card
+    const onRoster = await isOnLiveRoster({ email, firstName, lastName });
+    if (onRoster === null) {
+      return NextResponse.json({ error: 'Roster is unavailable. Please try again shortly.' }, { status: 503 });
+    }
+    if (!onRoster) {
+      return NextResponse.json({ error: 'This email is not on the SpotOn roster' }, { status: 403 });
     }
 
     // Check if email already exists

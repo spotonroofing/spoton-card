@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { generateSlug } from '@/lib/utils';
+import { isOnLiveRoster } from '@/lib/roster';
 
 async function requireAdmin() {
   const session = await auth();
@@ -61,6 +62,15 @@ export async function POST(req: NextRequest) {
 
     if (!firstName || !lastName || !email) {
       return NextResponse.json({ error: 'First name, last name, and email are required' }, { status: 400 });
+    }
+
+    // Only people on the live roster get a card
+    const onRoster = await isOnLiveRoster({ email: email.trim(), firstName, lastName });
+    if (onRoster === null) {
+      return NextResponse.json({ error: 'Roster is unavailable. Please try again shortly.' }, { status: 503 });
+    }
+    if (!onRoster) {
+      return NextResponse.json({ error: 'This person is not on the SpotOn roster' }, { status: 400 });
     }
 
     // Check duplicate email

@@ -1,12 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import {
-  resolveRosterSource,
-  syncFromSheet,
-  syncFromCore,
-  RosterConfigError,
-} from '@/lib/roster-sync';
+import { syncFromCore, RosterConfigError } from '@/lib/roster-sync';
 
 async function requireAdmin() {
   const session = await auth();
@@ -23,15 +18,15 @@ export async function POST() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const source = resolveRosterSource();
-    const result = source === 'core' ? await syncFromCore(prisma) : await syncFromSheet(prisma);
+    const source = 'core';
+    const result = await syncFromCore(prisma);
 
     return NextResponse.json({
       source,
       created: result.created,
       updated: result.updated,
       skipped: result.skipped,
-      deactivated: result.deactivated,
+      removed: result.removed,
       errors: result.errors.length > 0 ? result.errors : undefined,
     });
   } catch (error) {

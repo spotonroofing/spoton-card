@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { generateVCard } from '@/lib/vcard';
+import { isRepLive } from '@/lib/roster';
 
 export async function GET(
   req: NextRequest,
@@ -10,7 +11,7 @@ export async function GET(
     const { slug } = await params;
 
     const rep = await prisma.rep.findUnique({ where: { slug } });
-    if (!rep || !rep.isActive) {
+    if (!rep || !(await isRepLive(rep))) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 

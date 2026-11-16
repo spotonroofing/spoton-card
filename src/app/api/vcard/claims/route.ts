@@ -4,11 +4,15 @@ import path from 'path';
 import { prisma } from '@/lib/prisma';
 import { generateVCard } from '@/lib/vcard';
 import { CLAIMS_CONTACT } from '@/lib/claims-contact';
+import { isClaimsContactLive } from '@/lib/roster';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
+    if (!(await isClaimsContactLive())) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
     const company = await prisma.companySettings.findFirst().catch(() => null);
     const photo = await readFile(path.join(process.cwd(), CLAIMS_CONTACT.photoPath));
 

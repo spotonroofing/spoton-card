@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { notFound } from 'next/navigation';
 import { Metadata } from 'next';
 import CardClient from './CardClient';
+import { isRepLive, isClaimsContactLive } from '@/lib/roster';
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -14,6 +15,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
     if (!rep) {
       return { title: 'Not Found | SpotOn Card' };
+    }
+    if (!(await isRepLive(rep))) {
+      return { title: 'SpotOn Card' };
     }
 
     return {
@@ -57,7 +61,7 @@ export default async function CardPage({ params }: Props) {
     notFound();
   }
 
-  if (!rep.isActive) {
+  if (!(await isRepLive(rep))) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center px-4">
         <div className="text-center">
@@ -78,8 +82,11 @@ export default async function CardPage({ params }: Props) {
     // Continue without company data
   }
 
+  const claimsLive = await isClaimsContactLive();
+
   return (
     <CardClient
+      claimsLive={claimsLive}
       rep={{
         id: rep.id,
         firstName: rep.firstName,

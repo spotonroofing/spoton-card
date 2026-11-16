@@ -145,7 +145,7 @@ export default function AdminPage() {
       if (res.ok) {
         const parts = [`Created ${data.created}, updated ${data.updated}`];
         if (data.skipped > 0) parts.push(`${data.skipped} skipped (no email)`);
-        if (data.deactivated > 0) parts.push(`${data.deactivated} deactivated`);
+        if (data.removed > 0) parts.push(`${data.removed} removed`);
         if (data.errors?.length) parts.push(`${data.errors.length} error(s)`);
         const sourceLabel = data.source === 'core' ? 'SpotOn Core' : 'Google Sheet';
         setMessage(`Roster sync complete (source: ${sourceLabel}): ${parts.join(', ')}`);

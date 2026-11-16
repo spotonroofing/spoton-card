@@ -3,6 +3,7 @@ import EmailProvider from 'next-auth/providers/email';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 import { prisma } from './prisma';
 import { Resend } from 'resend';
+import { isOnLiveRoster } from './roster';
 
 function getResend() {
   if (!process.env.RESEND_API_KEY) {
@@ -78,6 +79,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     strategy: 'jwt',
   },
   callbacks: {
+    // Sign-in links go only to people with a card here who are still on the live roster.
+    async signIn({ user }) {
+      const email = user?.email?.trim();
+      if (!email) return false;
+      const rep = await prisma.rep.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
+      });
+      if (!rep) return false;
+      return (await isOnLiveRoster(rep)) !== false;
+    },
     async redirect({ url, baseUrl }) {
       // Allow relative URLs
       if (url.startsWith('/')) return `${baseUrl}${url}`;

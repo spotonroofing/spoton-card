@@ -50,61 +50,7 @@ async function main() {
 
   console.log('Created standalone admin: admin@spotonroof.com');
 
-  // Create Brack Dillon rep card (linked to brack@spotonroof.com)
-  const brack = await prisma.rep.upsert({
-    where: { email: 'brack@spotonroof.com' },
-    update: {},
-    create: {
-      email: 'brack@spotonroof.com',
-      firstName: 'Brack',
-      lastName: 'Dillon',
-      slug: 'brack-dillon',
-      jobTitle: 'Exterior Specialist',
-      phone: '(614) 832-0273',
-      role: 'admin',
-      isActive: true,
-    },
-  });
-
-  await prisma.user.upsert({
-    where: { email: 'brack@spotonroof.com' },
-    update: {},
-    create: {
-      email: 'brack@spotonroof.com',
-      name: 'Brack Dillon',
-    },
-  });
-
-  console.log('Created rep:', brack.firstName, brack.lastName, '(brack@spotonroof.com)');
-
-  // Create sample rep
-  const rep = await prisma.rep.upsert({
-    where: { email: 'jane@spotonroof.com' },
-    update: {},
-    create: {
-      email: 'jane@spotonroof.com',
-      firstName: 'Jane',
-      lastName: 'Smith',
-      slug: 'jane-smith',
-      jobTitle: 'Sales Representative',
-      phone: '(614) 555-0199',
-      bio: 'Helping homeowners protect their most valuable asset with quality roofing solutions.',
-      role: 'rep',
-      isActive: true,
-    },
-  });
-
-  console.log('Created rep:', rep.firstName, rep.lastName);
-
-  // Create NextAuth User records for reps
-  await prisma.user.upsert({
-    where: { email: 'jane@spotonroof.com' },
-    update: {},
-    create: {
-      email: 'jane@spotonroof.com',
-      name: 'Jane Smith',
-    },
-  });
+  // Reps are never seeded: they come only from the live roster (admin dashboard, Sync Roster).
 
   console.log('Seed complete!');
 }

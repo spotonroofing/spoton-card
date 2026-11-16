@@ -75,7 +75,6 @@ NEXTAUTH_SECRET=         # openssl rand -base64 32
 NEXTAUTH_URL=            # https://card.spotonroof.com (http://localhost:3000 for dev)
 RESEND_API_KEY=          # From resend.com dashboard
 RESEND_FROM_EMAIL=       # e.g. noreply@spotonroof.com
-ROSTER_SOURCE=           # unset/"sheet" = Google Sheets (current), "core" = SpotOn Core
 SPOTON_ROSTER_URL=       # SpotOn Core roster API endpoint (.../api/roster)
 SPOTON_ROSTER_KEY=       # x-spoton-key for the Core roster API
 ```
@@ -91,12 +90,12 @@ Complete. All pages, API routes, middleware, and components are implemented and 
 - iOS Safari needs Content-Type: text/vcard AND Content-Disposition: attachment for the save-contact prompt
 - NextAuth magic links expire in 24h by default — show a friendly 'resend' option on expiry
 - Prisma: always run 'npx prisma generate' after schema changes before running the app
-- Deactivated rep slugs should show 'card no longer active' not 404
+- Deactivated rep slugs should show 'card no longer active' not 404 (people who left the roster are deleted, so their slugs 404)
 
-## Roster Sync Cutover (Google Sheets → SpotOn Core)
+## Live Roster (SpotOn Core)
 
-The admin roster sync (`src/lib/roster-sync.ts`, driven by the admin dashboard sync button) has two sources selected by `ROSTER_SOURCE`: unset or `sheet` reads the Google Sheet (current behavior), `core` reads SpotOn Core's keyed roster API. `SPOTON_ROSTER_URL` and `SPOTON_ROSTER_KEY` are already set on the Railway service.
+Only people on the live roster are stored, shown or emailed. `src/lib/roster.ts` reads SpotOn Core's keyed roster API (`SPOTON_ROSTER_URL`, `SPOTON_ROSTER_KEY`, 5-minute cache); a current member is an `active` row with a role. The public card, vCard, claims contact, sign-in email, self-registration and admin create all check it. If Core is unreachable, cards fall back to the stored active flag and registration is refused.
 
-Cutover night: set `ROSTER_SOURCE=core` on the spoton-card Railway service (one env var, no deploy needed) and run the sync from the admin dashboard — the response message states which source ran. On the core path, deactivation follows each Core row's `active` flag, never absence from the response; roll back by deleting `ROSTER_SOURCE`.
+The admin Sync Roster button (`src/lib/roster-sync.ts`) reads Core only: current members are upserted; a row Core marks inactive deletes that person's card, login and pending sign-in tokens (admins included). Absence from the response never removes anyone. The Google Sheet path is gone; `ROSTER_SOURCE` is no longer read.
 
-Post-cutover cleanup (separate task): remove the sheet path from `src/lib/roster-sync.ts`, drop the `googleapis` dependency, and delete `GOOGLE_SERVICE_ACCOUNT_KEY` / `GOOGLE_SHEET_ID` from Railway.
+Cleanup still open: drop the `googleapis` dependency and delete `GOOGLE_SERVICE_ACCOUNT_KEY`, `GOOGLE_SHEET_ID` and `ROSTER_SOURCE` from Railway.

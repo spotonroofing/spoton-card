@@ -41,7 +41,7 @@ interface CompanyData {
   reviewLink: string | null;
 }
 
-export default function CardClient({ rep, company }: { rep: RepData; company: CompanyData | null }) {
+export default function CardClient({ rep, company, claimsLive }: { rep: RepData; company: CompanyData | null; claimsLive: boolean }) {
   const [shareFeedback, setShareFeedback] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [tapped, setTapped] = useState<string | null>(null);
@@ -133,7 +133,7 @@ export default function CardClient({ rep, company }: { rep: RepData; company: Co
   const heroIdx = sectionIndex++;
   const nameIdx = sectionIndex++;
   const quoteIdx = rep.bio ? sectionIndex++ : -1;
-  const hasClaims = showsClaimsContact(rep);
+  const hasClaims = claimsLive && showsClaimsContact(rep);
   const phoneIdx = hasPhone ? sectionIndex++ : -1;
   const claimsIdx = hasClaims ? sectionIndex++ : -1;
   const showEmail = !!rep.email && !isFieldInspector(rep.jobTitle);

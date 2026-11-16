@@ -1,15 +1,13 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  resolveRosterSource,
-  processSheetRows,
-  deactivateMissingReps,
   syncFromCore,
   RosterConfigError,
   type RosterDb,
-  type SyncResult,
   type CoreRosterEntry,
 } from '../src/lib/roster-sync';
+
+// Every person here is fictional (example.com, 555 numbers).
 
 interface FakeRep {
   id: string;
@@ -23,7 +21,7 @@ interface FakeRep {
   isActive: boolean;
 }
 
-function makeFakeDb(seed: Partial<FakeRep>[] = []) {
+function makeFakeDb(seed: Partial<FakeRep>[] = [], seedUsers: string[] = [], seedTokens: string[] = []) {
   let nextId = 1;
   const reps: FakeRep[] = seed.map((r) => ({
     id: r.id ?? `seed-${nextId++}`,
@@ -36,6 +34,8 @@ function makeFakeDb(seed: Partial<FakeRep>[] = []) {
     role: r.role ?? 'rep',
     isActive: r.isActive ?? true,
   }));
+  const users = new Set(seedUsers);
+  const tokens = new Set(seedTokens);
   const userUpserts: { email: string; name: string }[] = [];
   const createdData: Record<string, unknown>[] = [];
 
@@ -56,9 +56,6 @@ function makeFakeDb(seed: Partial<FakeRep>[] = []) {
         if (args.where.slug) return reps.find((r) => r.slug === args.where.slug) ?? null;
         return reps.find((r) => r.id === args.where.id) ?? null;
       },
-      async findMany() {
-        return reps.map((r) => ({ ...r }));
-      },
       async create(args: any) {
         createdData.push(args.data);
         const rep = { id: `new-${nextId++}`, ...args.data } as FakeRep;
@@ -70,137 +67,33 @@ function makeFakeDb(seed: Partial<FakeRep>[] = []) {
         Object.assign(rep, args.data);
         return rep;
       },
+      async delete(args: any) {
+        const i = reps.findIndex((r) => r.id === args.where.id);
+        reps.splice(i, 1);
+        return {};
+      },
     },
     user: {
       async upsert(args: any) {
         userUpserts.push({ email: args.where.email, name: args.create.name });
+        users.add(args.where.email);
+        return {};
+      },
+      async deleteMany(args: any) {
+        for (const e of args.where.email.in) users.delete(e);
+        return {};
+      },
+    },
+    verificationToken: {
+      async deleteMany(args: any) {
+        for (const e of args.where.identifier.in) tokens.delete(e);
         return {};
       },
     },
   };
 
-  return { db, reps, userUpserts, createdData };
+  return { db, reps, users, tokens, userUpserts, createdData };
 }
-
-function emptyResult(): SyncResult {
-  return { created: 0, updated: 0, skipped: 0, deactivated: 0, errors: [] };
-}
-
-// --- source selection ---
-
-test('unset ROSTER_SOURCE selects the sheet path', () => {
-  delete process.env.ROSTER_SOURCE;
-  assert.equal(resolveRosterSource(), 'sheet');
-});
-
-test('ROSTER_SOURCE=core selects the core path', () => {
-  process.env.ROSTER_SOURCE = 'core';
-  assert.equal(resolveRosterSource(), 'core');
-  process.env.ROSTER_SOURCE = 'sheet';
-  assert.equal(resolveRosterSource(), 'sheet');
-  delete process.env.ROSTER_SOURCE;
-});
-
-// --- sheet path characterization (current mapping, unchanged) ---
-
-const SHEET_HEADERS = ['First Name', 'Last Name', 'Role', 'Phone', 'Work Email', 'Personal Email'];
-
-test('sheet row creates a rep with the established mapping', async () => {
-  const { db, userUpserts, createdData } = makeFakeDb();
-  const result = emptyResult();
-  const rosterEmails = new Set<string>();
-
-  await processSheetRows(
-    db,
-    'Sales',
-    [
-      SHEET_HEADERS,
-      ['JOHN', 'DOE', 'Sales Rep', '614-555-1234', 'John.Doe@SpotOnRoof.com', 'jd@gmail.com'],
-      ['Jane', 'Smith', '', '', '', 'jane.smith@gmail.com'],
-      ['NoEmail', 'Person', 'Rep', '', '', ''],
-    ],
-    result,
-    rosterEmails
-  );
-
-  assert.equal(result.created, 2);
-  assert.equal(result.skipped, 1);
-  assert.deepEqual(createdData[0], {
-    firstName: 'John',
-    lastName: 'Doe',
-    email: 'john.doe@spotonroof.com',
-    slug: 'john-doe',
-    jobTitle: 'Sales Rep',
-    phone: '614-555-1234',
-    role: 'rep',
-    isActive: true,
-  });
-  // Empty Role column falls back to the tab name; personal email used when work is empty.
-  assert.deepEqual(createdData[1], {
-    firstName: 'Jane',
-    lastName: 'Smith',
-    email: 'jane.smith@gmail.com',
-    slug: 'jane-smith',
-    jobTitle: 'Sales',
-    phone: '',
-    role: 'rep',
-    isActive: true,
-  });
-  assert.deepEqual(Array.from(rosterEmails), ['john.doe@spotonroof.com', 'jane.smith@gmail.com']);
-  assert.equal(userUpserts.length, 2);
-  assert.deepEqual(userUpserts[0], { email: 'john.doe@spotonroof.com', name: 'John Doe' });
-});
-
-test('sheet row for an ADMIN_EMAILS address gets the admin role', async () => {
-  const { db, createdData } = makeFakeDb();
-  const result = emptyResult();
-  await processSheetRows(
-    db,
-    'Office',
-    [SHEET_HEADERS, ['Jarrod', 'Admin', 'Ops', '', 'jarrod@spotonroof.com', '']],
-    result,
-    new Set()
-  );
-  assert.equal(createdData[0].role, 'admin');
-});
-
-test('sheet row updates an existing rep matched by email and reactivates them', async () => {
-  const { db, reps } = makeFakeDb([
-    { id: 'r1', email: 'john.doe@spotonroof.com', firstName: 'Johnny', lastName: 'Doe', slug: 'johnny-doe', isActive: false },
-  ]);
-  const result = emptyResult();
-  await processSheetRows(
-    db,
-    'Sales',
-    [SHEET_HEADERS, ['John', 'Doe', 'Closer', '614-1111', 'John.Doe@SpotOnRoof.com', '']],
-    result,
-    new Set()
-  );
-  assert.equal(result.updated, 1);
-  assert.equal(result.created, 0);
-  const rep = reps.find((r) => r.id === 'r1')!;
-  assert.equal(rep.firstName, 'John');
-  assert.equal(rep.jobTitle, 'Closer');
-  assert.equal(rep.phone, '614-1111');
-  assert.equal(rep.isActive, true);
-});
-
-test('sheet deactivation: absent reps deactivated, admins and inactive reps untouched', async () => {
-  const { db, reps } = makeFakeDb([
-    { id: 'gone', email: 'gone@spotonroof.com', isActive: true },
-    { id: 'admin', email: 'jarrod@spotonroof.com', isActive: true },
-    { id: 'already', email: 'already@spotonroof.com', isActive: false },
-    { id: 'stays', email: 'stays@spotonroof.com', isActive: true },
-  ]);
-  const result = emptyResult();
-  await deactivateMissingReps(db, new Set(['stays@spotonroof.com']), result);
-  assert.equal(result.deactivated, 1);
-  assert.equal(reps.find((r) => r.id === 'gone')!.isActive, false);
-  assert.equal(reps.find((r) => r.id === 'admin')!.isActive, true);
-  assert.equal(reps.find((r) => r.id === 'stays')!.isActive, true);
-});
-
-// --- core path ---
 
 function coreEntry(overrides: Partial<CoreRosterEntry>): CoreRosterEntry {
   return {
@@ -210,7 +103,7 @@ function coreEntry(overrides: Partial<CoreRosterEntry>): CoreRosterEntry {
     phone: null,
     firstName: null,
     lastName: null,
-    roleLabel: null,
+    roleLabel: 'Rep',
     workEmail: null,
     personalEmail: null,
     status: 'active',
@@ -245,22 +138,22 @@ afterEach(() => {
   delete process.env.SPOTON_ROSTER_KEY;
 });
 
-test('core path throws RosterConfigError when env vars are missing', async () => {
+test('sync throws RosterConfigError when env vars are missing', async () => {
   delete process.env.SPOTON_ROSTER_URL;
   const { db } = makeFakeDb();
   await assert.rejects(() => syncFromCore(db), RosterConfigError);
 });
 
-test('core path upserts active entries with the same Rep shape as the sheet path', async () => {
+test('current roster members are created with the established Rep shape', async () => {
   stubCoreApi([
     coreEntry({
-      firstName: 'Alex',
-      lastName: 'Warbritton',
+      firstName: 'Sam',
+      lastName: 'Rivera',
       roleLabel: 'Exterior Specialist',
-      phone: '6143273833',
-      workEmail: 'alex@spotonroof.com',
-      personalEmail: 'alex.personal@gmail.com',
-      email: 'alex@spotonroof.com',
+      phone: '6145550101',
+      workEmail: 'sam@example.com',
+      personalEmail: 'sam.personal@example.com',
+      email: 'sam@example.com',
     }),
   ]);
   const { db, createdData, userUpserts } = makeFakeDb();
@@ -268,121 +161,126 @@ test('core path upserts active entries with the same Rep shape as the sheet path
 
   assert.equal(result.created, 1);
   assert.deepEqual(createdData[0], {
-    firstName: 'Alex',
-    lastName: 'Warbritton',
-    email: 'alex@spotonroof.com',
-    slug: 'alex-warbritton',
+    firstName: 'Sam',
+    lastName: 'Rivera',
+    email: 'sam@example.com',
+    slug: 'sam-rivera',
     jobTitle: 'Exterior Specialist',
-    phone: '6143273833',
+    phone: '6145550101',
     role: 'rep',
     isActive: true,
   });
-  assert.deepEqual(userUpserts[0], { email: 'alex@spotonroof.com', name: 'Alex Warbritton' });
+  assert.deepEqual(userUpserts[0], { email: 'sam@example.com', name: 'Sam Rivera' });
   assert.equal(fetchCalls[0].headers['x-spoton-key'], 'test-key');
   assert.ok(fetchCalls[0].url.startsWith('https://core.example/api/roster?page=1'));
 });
 
-test('core path splits a combined name when first/last are missing', async () => {
-  stubCoreApi([
-    coreEntry({ name: 'Mary Jo Kopechne', workEmail: 'maryjo@spotonroof.com' }),
-  ]);
+test('an ADMIN_EMAILS address gets the admin role', async () => {
+  stubCoreApi([coreEntry({ firstName: 'Pat', lastName: 'Owner', roleLabel: 'Management', workEmail: 'jarrod@spotonroof.com' })]);
+  const { db, createdData } = makeFakeDb();
+  await syncFromCore(db);
+  assert.equal(createdData[0].role, 'admin');
+});
+
+test('a combined name is split when first/last are missing', async () => {
+  stubCoreApi([coreEntry({ name: 'Mary Jo Example', workEmail: 'maryjo@example.com' })]);
   const { db, createdData } = makeFakeDb();
   await syncFromCore(db);
   assert.equal(createdData[0].firstName, 'Mary');
-  assert.equal(createdData[0].lastName, 'Jo Kopechne');
+  assert.equal(createdData[0].lastName, 'Jo Example');
 });
 
-test('core path deactivates only on active=false, never on absence', async () => {
-  const { db, reps } = makeFakeDb([
-    { id: 'quit', email: 'quit@spotonroof.com', firstName: 'Quit', lastName: 'Guy', slug: 'quit-guy', isActive: true },
-    { id: 'absent', email: 'absent@spotonroof.com', firstName: 'Absent', lastName: 'Gal', slug: 'absent-gal', isActive: true },
-  ]);
+test('active entries with no roster seat (system accounts) are skipped', async () => {
+  stubCoreApi([coreEntry({ name: 'Help desk check (automated)', roleLabel: null, email: 'check@example.com' })]);
+  const { db, createdData } = makeFakeDb();
+  const result = await syncFromCore(db);
+  assert.equal(createdData.length, 0);
+  assert.equal(result.skipped, 1);
+});
+
+test('someone Core marks inactive is removed: card, login and pending sign-in tokens', async () => {
+  const { db, reps, users, tokens } = makeFakeDb(
+    [{ id: 'quit', email: 'quit@example.com', firstName: 'Quinn', lastName: 'Left', slug: 'quinn-left', phone: '6145550102' }],
+    ['quit@example.com', 'quinn.home@example.com'],
+    ['quit@example.com']
+  );
   stubCoreApi([
     coreEntry({
-      firstName: 'Quit',
-      lastName: 'Guy',
-      workEmail: 'quit@spotonroof.com',
+      firstName: 'Quinn',
+      lastName: 'Left',
+      workEmail: 'quit@example.com',
+      personalEmail: 'quinn.home@example.com',
       active: false,
       status: 'inactive',
     }),
   ]);
   const result = await syncFromCore(db);
-  assert.equal(result.deactivated, 1);
-  assert.equal(reps.find((r) => r.id === 'quit')!.isActive, false);
-  // Absent from the Core response entirely — must remain active.
-  assert.equal(reps.find((r) => r.id === 'absent')!.isActive, true);
+  assert.equal(result.removed, 1);
+  assert.equal(reps.length, 0);
+  assert.equal(users.size, 0);
+  assert.equal(tokens.size, 0);
 });
 
-test('core path never deactivates ADMIN_EMAILS reps even if Core says inactive', async () => {
+test('admins are removed too when Core marks them inactive', async () => {
   const { db, reps } = makeFakeDb([
-    { id: 'adm', email: 'jarrod@spotonroof.com', firstName: 'Jarrod', lastName: 'Admin', slug: 'jarrod-admin', isActive: true },
+    { id: 'adm', email: 'jarrod@spotonroof.com', firstName: 'Pat', lastName: 'Owner', slug: 'pat-owner', role: 'admin' },
   ]);
   stubCoreApi([
-    coreEntry({
-      firstName: 'Jarrod',
-      lastName: 'Admin',
-      workEmail: 'jarrod@spotonroof.com',
-      active: false,
-      status: 'inactive',
-    }),
+    coreEntry({ firstName: 'Pat', lastName: 'Owner', workEmail: 'jarrod@spotonroof.com', active: false, status: 'inactive' }),
   ]);
   const result = await syncFromCore(db);
-  assert.equal(result.deactivated, 0);
-  assert.equal(reps.find((r) => r.id === 'adm')!.isActive, true);
+  assert.equal(result.removed, 1);
+  assert.equal(reps.length, 0);
 });
 
-test('core path leaves jobTitle and phone untouched when Core has no value', async () => {
+test('absence from the Core response never removes anyone', async () => {
   const { db, reps } = makeFakeDb([
-    { id: 'r1', email: 'brack@spotonroof.com', firstName: 'Brack', lastName: 'Dillon', slug: 'brack-dillon', jobTitle: 'Owner', phone: '614-555-9999', isActive: true },
+    { id: 'absent', email: 'absent@example.com', firstName: 'Abby', lastName: 'Absent', slug: 'abby-absent' },
   ]);
+  stubCoreApi([]);
+  const result = await syncFromCore(db);
+  assert.equal(result.removed, 0);
+  assert.equal(reps.length, 1);
+});
+
+test('a former Core row never removes someone who is also a current member (rehire)', async () => {
+  const { db, reps, users } = makeFakeDb(
+    [{ id: 'back', email: 'back@example.com', firstName: 'Robin', lastName: 'Back', slug: 'robin-back' }],
+    ['back@example.com']
+  );
   stubCoreApi([
-    coreEntry({
-      firstName: 'Brack',
-      lastName: 'Dillon',
-      workEmail: 'brack@spotonroof.com',
-      roleLabel: null,
-      phone: null,
-    }),
+    coreEntry({ firstName: 'Robin', lastName: 'Back', workEmail: 'back@example.com', active: false, status: 'inactive' }),
+    coreEntry({ firstName: 'Robin', lastName: 'Back', workEmail: 'back@example.com' }),
   ]);
+  const result = await syncFromCore(db);
+  assert.equal(result.removed, 0);
+  assert.equal(reps.length, 1);
+  assert.ok(users.has('back@example.com'));
+});
+
+test('phone is left untouched when Core has no value', async () => {
+  const { db, reps } = makeFakeDb([
+    { id: 'r1', email: 'lee@example.com', firstName: 'Lee', lastName: 'Example', slug: 'lee-example', jobTitle: 'Old', phone: '614-555-9999' },
+  ]);
+  stubCoreApi([coreEntry({ firstName: 'Lee', lastName: 'Example', workEmail: 'lee@example.com', roleLabel: 'Team Lead', phone: null })]);
   const result = await syncFromCore(db);
   assert.equal(result.updated, 1);
   const rep = reps.find((r) => r.id === 'r1')!;
-  assert.equal(rep.jobTitle, 'Owner');
+  assert.equal(rep.jobTitle, 'Team Lead');
   assert.equal(rep.phone, '614-555-9999');
 });
 
-test('sheet path still overwrites phone with an empty cell (unchanged behavior)', async () => {
+test('an existing inactive rep is updated and reactivated when Core says active', async () => {
   const { db, reps } = makeFakeDb([
-    { id: 'r1', email: 'john.doe@spotonroof.com', firstName: 'John', lastName: 'Doe', slug: 'john-doe', phone: '614-0000', isActive: true },
-  ]);
-  const result = emptyResult();
-  await processSheetRows(
-    db,
-    'Sales',
-    [SHEET_HEADERS, ['John', 'Doe', 'Closer', '', 'john.doe@spotonroof.com', '']],
-    result,
-    new Set()
-  );
-  assert.equal(reps.find((r) => r.id === 'r1')!.phone, '');
-});
-
-test('core path updates an existing rep and reactivates when Core says active', async () => {
-  const { db, reps } = makeFakeDb([
-    { id: 'r1', email: 'alex@spotonroof.com', firstName: 'Alex', lastName: 'Warbritton', slug: 'alex-warbritton', jobTitle: 'Old Title', isActive: false },
+    { id: 'r1', email: 'sam@example.com', firstName: 'Sam', lastName: 'Rivera', slug: 'sam-rivera', jobTitle: 'Old Title', isActive: false },
   ]);
   stubCoreApi([
-    coreEntry({
-      firstName: 'Alex',
-      lastName: 'Warbritton',
-      roleLabel: 'Exterior Specialist',
-      phone: '6143273833',
-      workEmail: 'alex@spotonroof.com',
-    }),
+    coreEntry({ firstName: 'Sam', lastName: 'Rivera', roleLabel: 'Exterior Specialist', phone: '6145550101', workEmail: 'sam@example.com' }),
   ]);
   const result = await syncFromCore(db);
   assert.equal(result.updated, 1);
   const rep = reps.find((r) => r.id === 'r1')!;
   assert.equal(rep.jobTitle, 'Exterior Specialist');
-  assert.equal(rep.phone, '6143273833');
+  assert.equal(rep.phone, '6145550101');
   assert.equal(rep.isActive, true);
 });
